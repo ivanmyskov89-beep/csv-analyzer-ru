@@ -1,2 +1,22 @@
+# Виртуальное окружение
+venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Секреты
 .env
-.env.*
+
+# Большие файлы
+*.csv
+test_large.csv
+
+# IDE
+.vscode/
+.idea/
+
+# Логи
+*.log
