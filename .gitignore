@@ -20,3 +20,4 @@ test_large.csv
 
 # Логи
 *.log
+*.csv
