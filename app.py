@@ -7,11 +7,14 @@ import io
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
-# ========== СТИЛИ ==========
-st.set_page_config(page_title="CSV Анализатор", layout="wide")
+# ========== СТИЛИ И ОФОРМЛЕНИЕ ==========
+st.set_page_config(page_title="CSV Анализатор Pro", layout="wide", page_icon="🚀")
+
 st.markdown("""
     <style>
-    .stApp { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+    .stApp {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
     .stButton > button {
         background: linear-gradient(90deg, #FF512F 0%, #DD2475 100%);
         color: white;
@@ -20,11 +23,19 @@ st.markdown("""
         border-radius: 40px;
         width: 100%;
     }
-    .stButton > button:hover { transform: translateY(-2px); }
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+    }
+    h1 {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-# ========== СЕССИЯ ==========
+# ========== ИНИЦИАЛИЗАЦИЯ СЕССИИ ==========
 if 'uploaded_data' not in st.session_state:
     st.session_state.uploaded_data = None
 if 'premium' not in st.session_state:
@@ -32,13 +43,13 @@ if 'premium' not in st.session_state:
 if 'temp_premium' not in st.session_state:
     st.session_state.temp_premium = False
 
-# ========== КЛЮЧИ ==========
+# ========== ЗАГРУЗКА КЛЮЧЕЙ ==========
 load_dotenv()
 SHOP_ID = os.getenv("SHOP_ID")
 SECRET_KEY = os.getenv("SECRET_KEY")
 
 if not SHOP_ID or not SECRET_KEY:
-    st.error("Ошибка: Не найдены ключи ЮKassa")
+    st.error("⚠️ Ошибка: Не найдены ключи ЮKassa")
     st.stop()
 
 Configuration.account_id = SHOP_ID
@@ -59,22 +70,24 @@ if query_params.get("success") == "true":
     st.balloons()
     if query_params.get("type") == "single":
         st.session_state.temp_premium = True
+        st.session_state.premium = False
     elif query_params.get("type") == "monthly":
         st.session_state.premium = True
+        st.session_state.temp_premium = False
     st.query_params.clear()
     if st.button("🚀 Продолжить работу"):
         st.rerun()
     st.stop()
 
 # ========== ОСНОВНОЙ ИНТЕРФЕЙС ==========
-st.title("📊 CSV Анализатор")
-st.markdown("### Мгновенный анализ больших CSV файлов")
+st.title("🚀 CSV Анализатор")
+st.markdown("### Мгновенный анализ больших CSV-файлов без зависаний")
 
 with st.sidebar:
     st.header("💎 Тарифы")
-    st.markdown("**Бесплатно** - до 50 000 строк")
-    st.markdown("**🎫 Разовый доступ** - 200 ₽ (24 часа)")
-    st.markdown("**👑 Premium** - 1000 ₽ (30 дней)")
+    st.markdown("**Бесплатно** — до 50 000 строк")
+    st.markdown("**🎫 Разовый доступ** — 200 ₽ (24 часа)")
+    st.markdown("**👑 Premium** — 1000 ₽ (30 дней)")
     if is_premium_active():
         st.success("⭐ Premium активен")
 
@@ -83,23 +96,24 @@ uploaded_file = st.file_uploader("📂 Выберите CSV файл", type="csv
 
 if uploaded_file is not None:
     st.session_state.uploaded_data = uploaded_file.getvalue()
-    st.rerun()
+    st.session_state.uploaded_filename = uploaded_file.name
 
 # Анализ
-if st.session_state.uploaded_data is not None:
+if st.session_state.get("uploaded_data") is not None:
     try:
         df = pd.read_csv(io.BytesIO(st.session_state.uploaded_data))
         rows = len(df)
         
-        # Проверка лимита
+        # Если превышен лимит и нет премиума
         if not is_premium_active() and rows > MAX_FREE_ROWS:
-            st.warning(f"⚠️ Файл содержит {rows:,} строк (бесплатно до {MAX_FREE_ROWS:,})")
+            st.warning(f"⚠️ Ваш файл содержит **{rows:,} строк** (бесплатно до {MAX_FREE_ROWS:,})")
             
-            st.markdown("### 💳 Оплатите доступ:")
+            st.markdown("## 💳 Выберите способ оплаты:")
+            
             col1, col2 = st.columns(2)
             
             with col1:
-                if st.button("🎫 Разовый доступ (200 ₽)"):
+                if st.button("🎫 Разовый доступ (200 ₽)", use_container_width=True):
                     payment = Payment.create({
                         "amount": {"value": "200", "currency": "RUB"},
                         "payment_method_data": {"type": "bank_card"},
@@ -112,7 +126,7 @@ if st.session_state.uploaded_data is not None:
                     st.markdown(f"[👉 ОПЛАТИТЬ 200 ₽ 👈]({payment.confirmation.confirmation_url})")
             
             with col2:
-                if st.button("👑 Premium на месяц (1000 ₽)"):
+                if st.button("👑 Premium на месяц (1000 ₽)", use_container_width=True):
                     payment = Payment.create({
                         "amount": {"value": "1000", "currency": "RUB"},
                         "payment_method_data": {"type": "bank_card"},
@@ -127,22 +141,29 @@ if st.session_state.uploaded_data is not None:
             st.info("💡 После оплаты нажмите 'Продолжить работу'")
             st.stop()
         
-        # Результат
-        st.success(f"✅ Загружено: {rows:,} строк")
+        # Анализ
+        st.success(f"✅ Файл загружен: {rows:,} строк")
         st.dataframe(df.head(100))
         
+        # Статистика
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Всего строк", f"{rows:,}")
+        col2.metric("Столбцов", len(df.columns))
+        col3.metric("Пустых ячеек", df.isnull().sum().sum())
+        
+        # Экспорт
         st.markdown("### 💾 Экспорт")
-        fmt = st.selectbox("Формат:", ["CSV", "Excel", "JSON"])
+        fmt = st.selectbox("Формат:", ["CSV", "Excel (XLSX)", "JSON"])
         
         if fmt == "CSV":
             data = df.to_csv(index=False).encode('utf-8-sig')
             mime = "text/csv"
             ext = "csv"
-        elif fmt == "Excel":
-            buf = io.BytesIO()
-            with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+        elif fmt == "Excel (XLSX)":
+            out = io.BytesIO()
+            with pd.ExcelWriter(out, engine='openpyxl') as writer:
                 df.to_excel(writer, index=False)
-            data = buf.getvalue()
+            data = out.getvalue()
             mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ext = "xlsx"
         else:
@@ -152,7 +173,7 @@ if st.session_state.uploaded_data is not None:
         
         st.download_button(f"📥 Скачать {fmt}", data, f"data.{ext}", mime)
         
-        if st.button("🗑️ Новый файл"):
+        if st.button("🗑️ Загрузить другой файл"):
             st.session_state.uploaded_data = None
             st.rerun()
             
@@ -160,4 +181,4 @@ if st.session_state.uploaded_data is not None:
         st.error(f"Ошибка: {e}")
         st.session_state.uploaded_data = None
 else:
-    st.info("👈 Загрузите CSV файл")
+    st.info("👈 Загрузите CSV файл для анализа")
