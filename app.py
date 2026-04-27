@@ -4,6 +4,7 @@ from yookassa import Configuration, Payment
 import uuid
 import os
 import io
+import sqlite3
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
@@ -30,17 +31,71 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ========== ИНИЦИАЛИЗАЦИЯ ==========
-if 'premium' not in st.session_state:
-    st.session_state.premium = False
+# ========== ИНИЦИАЛИЗАЦИЯ СЕССИИ ==========
+if 'user_id' not in st.session_state:
+    # Простой идентификатор пользователя (в реальном проекте используйте аккаунты)
+    st.session_state.user_id = str(uuid.uuid4())
 if 'temp_premium' not in st.session_state:
     st.session_state.temp_premium = False
-if 'df' not in st.session_state:
-    st.session_state.df = None
-if 'filename' not in st.session_state:
-    st.session_state.filename = None
 
-# ========== КЛЮЧИ ==========
+# ========== РАБОТА С БАЗОЙ ДАННЫХ ==========
+def init_db():
+    """Создаёт таблицу пользователей, если её нет"""
+    conn = sqlite3.connect('premium_users.db')
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id TEXT PRIMARY KEY,
+            premium_type TEXT,
+            expires_at TIMESTAMP,
+            payment_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def check_premium(user_id):
+    """Проверяет, активен ли Premium у пользователя"""
+    conn = sqlite3.connect('premium_users.db')
+    c = conn.cursor()
+    c.execute('''
+        SELECT premium_type, expires_at FROM users 
+        WHERE user_id = ? AND expires_at > ?
+        ORDER BY expires_at DESC LIMIT 1
+    ''', (user_id, datetime.now()))
+    result = c.fetchone()
+    conn.close()
+    
+    if result:
+        return result[0]  # 'single' или 'monthly'
+    return None
+
+def activate_premium(user_id, premium_type, payment_id):
+    """Активирует Premium в базе данных"""
+    conn = sqlite3.connect('premium_users.db')
+    c = conn.cursor()
+    
+    now = datetime.now()
+    if premium_type == 'single':
+        expires_at = now + timedelta(hours=24)
+    elif premium_type == 'monthly':
+        expires_at = now + timedelta(days=30)
+    else:
+        expires_at = now
+    
+    c.execute('''
+        INSERT OR REPLACE INTO users (user_id, premium_type, expires_at, payment_id)
+        VALUES (?, ?, ?, ?)
+    ''', (user_id, premium_type, expires_at, payment_id))
+    
+    conn.commit()
+    conn.close()
+
+# Инициализируем базу данных при старте
+init_db()
+
+# ========== КЛЮЧИ ЮKASSA ==========
 load_dotenv()
 SHOP_ID = os.getenv("SHOP_ID")
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -58,17 +113,27 @@ PRICE_SINGLE = 200
 PRICE_MONTHLY = 1000
 
 def is_premium_active():
-    return st.session_state.get("premium", False) or st.session_state.get("temp_premium", False)
+    """Проверяет Premium через базу данных"""
+    premium_type = check_premium(st.session_state.user_id)
+    if premium_type:
+        st.session_state.temp_premium = True
+        return True
+    st.session_state.temp_premium = False
+    return False
 
 # ========== ВОЗВРАТ ПОСЛЕ ОПЛАТЫ ==========
 query_params = st.query_params
 if query_params.get("success") == "true":
+    payment_type = query_params.get("type", "unknown")
+    payment_id = query_params.get("payment_id", "")
+    
+    if payment_type == "single" or payment_type == "monthly":
+        # Сохраняем Premium в базу данных
+        activate_premium(st.session_state.user_id, payment_type, payment_id)
+    
     st.title("✅ Оплата прошла успешно!")
     st.balloons()
-    if query_params.get("type") == "single":
-        st.session_state.temp_premium = True
-    elif query_params.get("type") == "monthly":
-        st.session_state.premium = True
+    st.markdown(f"**{payment_type.upper()}** доступ активирован!")
     st.query_params.clear()
     if st.button("🚀 Продолжить работу"):
         st.rerun()
@@ -83,29 +148,26 @@ with st.sidebar:
     st.markdown("**Бесплатно** — до 50 000 строк")
     st.markdown("**🎫 Разовый доступ** — 200 ₽ (24 часа)")
     st.markdown("**👑 Premium** — 1000 ₽ (30 дней)")
-    if is_premium_active():
-        st.success("⭐ Premium активен")
+    
+    premium_type = check_premium(st.session_state.user_id)
+    if premium_type:
+        st.success(f"⭐ Premium активен ({premium_type})")
+    st.caption(f"🆔 Ваш ID: {st.session_state.user_id[:8]}...")
 
 # ========== ЗАГРУЗКА ФАЙЛА ==========
 uploaded_file = st.file_uploader("📂 Выберите CSV файл", type="csv")
 
 if uploaded_file is not None:
-    # Загружаем файл ТОЛЬКО если изменился
-    if st.session_state.df is None or st.session_state.filename != uploaded_file.name:
-        with st.spinner("🔄 Чтение файла..."):
-            st.session_state.df = pd.read_csv(uploaded_file)
-            st.session_state.filename = uploaded_file.name
-
-# ========== АНАЛИЗ (ЕСЛИ ФАЙЛ ЗАГРУЖЕН) ==========
-if st.session_state.df is not None:
-    df = st.session_state.df
-    rows = len(df)
+    with st.spinner("🔄 Чтение файла..."):
+        df = pd.read_csv(uploaded_file)
+        rows = len(df)
     
-    # ОТЛАДКА: показываем количество строк всегда
-    st.caption(f"📊 Отладка: в файле {rows:,} строк. Лимит: {MAX_FREE_ROWS:,}. Premium активен: {is_premium_active()}")
+    # ОТЛАДКА
+    premium_status = check_premium(st.session_state.user_id)
+    st.caption(f"📊 Отладка: строк {rows:,} | лимит {MAX_FREE_ROWS:,} | Premium: {premium_status if premium_status else 'Нет'}")
     
-    # ========== ПРОВЕРКА ЛИМИТА И ОТОБРАЖЕНИЕ КНОПОК ==========
-    if not is_premium_active() and rows > MAX_FREE_ROWS:
+    # ========== ПРОВЕРКА ЛИМИТА ==========
+    if not premium_status and rows > MAX_FREE_ROWS:
         st.warning(f"⚠️ Ваш файл содержит **{rows:,} строк** (бесплатно до {MAX_FREE_ROWS:,})")
         
         st.markdown("## 💳 Выберите способ оплаты:")
@@ -119,7 +181,7 @@ if st.session_state.df is not None:
                     "payment_method_data": {"type": "bank_card"},
                     "confirmation": {
                         "type": "redirect",
-                        "return_url": "https://csv-analyzer-ru.onrender.com/?success=true&type=single"
+                        "return_url": f"https://csv-analyzer-ru.onrender.com/?success=true&type=single&payment_id={uuid.uuid4()}"
                     },
                     "description": f"Разовый доступ - {uuid.uuid4()}"
                 })
@@ -132,17 +194,17 @@ if st.session_state.df is not None:
                     "payment_method_data": {"type": "bank_card"},
                     "confirmation": {
                         "type": "redirect",
-                        "return_url": "https://csv-analyzer-ru.onrender.com/?success=true&type=monthly"
+                        "return_url": f"https://csv-analyzer-ru.onrender.com/?success=true&type=monthly&payment_id={uuid.uuid4()}"
                     },
                     "description": f"Premium - {uuid.uuid4()}"
                 })
                 st.markdown(f"[👉 ОПЛАТИТЬ 1000 ₽ 👈]({payment.confirmation.confirmation_url})")
         
-        st.info("💡 После оплаты нажмите 'Продолжить работу'")
-        st.stop()  # Останавливаем здесь, не показываем анализ
+        st.info("💡 После оплаты страница обновится автоматически")
+        st.stop()
     
-    # ========== АНАЛИЗ (ПРЕМИУМ ИЛИ БЕСПЛАТНЫЙ ФАЙЛ) ==========
-    st.success(f"✅ Файл **{st.session_state.filename}** загружен: **{rows:,} строк**")
+    # ========== АНАЛИЗ ==========
+    st.success(f"✅ Файл загружен: **{rows:,} строк**" + (" (Premium активен)" if premium_status else ""))
     
     st.markdown("---")
     st.markdown("## 📊 Предпросмотр")
@@ -177,7 +239,7 @@ if st.session_state.df is not None:
         st.download_button(
             label="📥 Скачать CSV",
             data=csv_data,
-            file_name=f"{st.session_state.filename.replace('.csv', '')}_analyzed.csv",
+            file_name="analyzed_data.csv",
             mime="text/csv",
             use_container_width=True
         )
@@ -191,7 +253,7 @@ if st.session_state.df is not None:
             st.download_button(
                 label="📥 Скачать Excel",
                 data=excel_data,
-                file_name=f"{st.session_state.filename.replace('.csv', '')}_analyzed.xlsx",
+                file_name="analyzed_data.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
@@ -203,18 +265,10 @@ if st.session_state.df is not None:
         st.download_button(
             label="📥 Скачать JSON",
             data=json_data,
-            file_name=f"{st.session_state.filename.replace('.csv', '')}_analyzed.json",
+            file_name="analyzed_data.json",
             mime="application/json",
             use_container_width=True
         )
-    
-    # Сброс
-    st.markdown("---")
-    if st.button("🗑️ Загрузить другой файл", use_container_width=True):
-        st.session_state.df = None
-        st.session_state.filename = None
-        st.session_state.premium = False
-        st.session_state.temp_premium = False
-        st.rerun()
+
 else:
     st.info("👈 Загрузите CSV файл для анализа")
