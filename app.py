@@ -3,6 +3,7 @@ import pandas as pd
 from yookassa import Configuration, Payment
 import uuid
 import os
+import io
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
@@ -25,11 +26,6 @@ st.markdown("""
     .stButton > button:hover {
         transform: translateY(-2px);
         box-shadow: 0 8px 25px rgba(0,0,0,0.3);
-    }
-    h1 {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -89,24 +85,26 @@ with st.sidebar:
     st.markdown("**👑 Premium** — 1000 ₽ (30 дней)")
     if is_premium_active():
         st.success("⭐ Premium активен")
-        if st.button("🔄 Проверить статус оплаты"):
-            st.rerun()
 
-# Загрузка файла
+# ========== ЗАГРУЗКА ФАЙЛА ==========
 uploaded_file = st.file_uploader("📂 Выберите CSV файл", type="csv")
 
 if uploaded_file is not None:
-    with st.spinner("🔄 Чтение файла..."):
-        st.session_state.df = pd.read_csv(uploaded_file)
-        st.session_state.filename = uploaded_file.name
-    st.rerun()
+    # Загружаем файл ТОЛЬКО если изменился
+    if st.session_state.df is None or st.session_state.filename != uploaded_file.name:
+        with st.spinner("🔄 Чтение файла..."):
+            st.session_state.df = pd.read_csv(uploaded_file)
+            st.session_state.filename = uploaded_file.name
 
-# Анализ
+# ========== АНАЛИЗ (ЕСЛИ ФАЙЛ ЗАГРУЖЕН) ==========
 if st.session_state.df is not None:
     df = st.session_state.df
     rows = len(df)
     
-    # Если превышен лимит и нет премиума
+    # ОТЛАДКА: показываем количество строк всегда
+    st.caption(f"📊 Отладка: в файле {rows:,} строк. Лимит: {MAX_FREE_ROWS:,}. Premium активен: {is_premium_active()}")
+    
+    # ========== ПРОВЕРКА ЛИМИТА И ОТОБРАЖЕНИЕ КНОПОК ==========
     if not is_premium_active() and rows > MAX_FREE_ROWS:
         st.warning(f"⚠️ Ваш файл содержит **{rows:,} строк** (бесплатно до {MAX_FREE_ROWS:,})")
         
@@ -140,10 +138,10 @@ if st.session_state.df is not None:
                 })
                 st.markdown(f"[👉 ОПЛАТИТЬ 1000 ₽ 👈]({payment.confirmation.confirmation_url})")
         
-        st.info("💡 После оплаты нажмите 'Продолжить работу' и обновите страницу")
-        st.stop()
+        st.info("💡 После оплаты нажмите 'Продолжить работу'")
+        st.stop()  # Останавливаем здесь, не показываем анализ
     
-    # Анализ (Premium активен или файл бесплатный)
+    # ========== АНАЛИЗ (ПРЕМИУМ ИЛИ БЕСПЛАТНЫЙ ФАЙЛ) ==========
     st.success(f"✅ Файл **{st.session_state.filename}** загружен: **{rows:,} строк**")
     
     st.markdown("---")
@@ -159,7 +157,6 @@ if st.session_state.df is not None:
     col3.metric("🔍 Пустых ячеек", df.isnull().sum().sum())
     col4.metric("🎯 Типов данных", len(df.dtypes.unique()))
     
-    # Детальная информация
     with st.expander("📋 Детальная информация по столбцам"):
         dtype_df = pd.DataFrame({
             "Столбец": df.columns,
@@ -169,58 +166,55 @@ if st.session_state.df is not None:
         })
         st.dataframe(dtype_df, use_container_width=True)
     
+    # ========== ЭКСПОРТ ==========
     st.markdown("---")
     st.markdown("## 💾 Экспорт")
     
-    # Выбор формата
-    export_format = st.selectbox(
-        "Выберите формат:",
-        ["CSV", "Excel (XLSX)", "JSON"],
-        help="CSV — универсальный формат"
-    )
+    export_format = st.radio("Выберите формат:", ["CSV", "Excel (XLSX)", "JSON"], horizontal=True)
     
-    # Генерируем файл при нажатии кнопки (не заранее!)
     if export_format == "CSV":
-        if st.button("📥 Скачать CSV", use_container_width=True):
-            csv_data = df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                label="✅ Нажмите для скачивания",
-                data=csv_data,
-                file_name="analyzed_data.csv",
-                mime="text/csv"
-            )
+        csv_data = df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📥 Скачать CSV",
+            data=csv_data,
+            file_name=f"{st.session_state.filename.replace('.csv', '')}_analyzed.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
     
     elif export_format == "Excel (XLSX)":
-        if st.button("📥 Скачать Excel", use_container_width=True):
-            try:
-                import io
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df.to_excel(writer, index=False)
-                excel_data = output.getvalue()
-                st.download_button(
-                    label="✅ Нажмите для скачивания",
-                    data=excel_data,
-                    file_name="analyzed_data.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            except ImportError:
-                st.error("Excel не поддерживается на сервере. Используйте CSV или JSON.")
+        try:
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name='Data')
+            excel_data = output.getvalue()
+            st.download_button(
+                label="📥 Скачать Excel",
+                data=excel_data,
+                file_name=f"{st.session_state.filename.replace('.csv', '')}_analyzed.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        except Exception as e:
+            st.error(f"Excel не поддерживается: {e}")
     
     elif export_format == "JSON":
-        if st.button("📥 Скачать JSON", use_container_width=True):
-            json_data = df.to_json(orient='records', indent=2, force_ascii=False).encode('utf-8-sig')
-            st.download_button(
-                label="✅ Нажмите для скачивания",
-                data=json_data,
-                file_name="analyzed_data.json",
-                mime="application/json"
-            )
+        json_data = df.to_json(orient='records', indent=2, force_ascii=False).encode('utf-8')
+        st.download_button(
+            label="📥 Скачать JSON",
+            data=json_data,
+            file_name=f"{st.session_state.filename.replace('.csv', '')}_analyzed.json",
+            mime="application/json",
+            use_container_width=True
+        )
     
-    # Кнопка сброса
-    if st.button("🗑️ Загрузить другой файл"):
+    # Сброс
+    st.markdown("---")
+    if st.button("🗑️ Загрузить другой файл", use_container_width=True):
         st.session_state.df = None
         st.session_state.filename = None
+        st.session_state.premium = False
+        st.session_state.temp_premium = False
         st.rerun()
 else:
     st.info("👈 Загрузите CSV файл для анализа")
