@@ -15,8 +15,6 @@ st.markdown("""
     .stApp {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     }
-    
-    /* Стиль для кнопки Premium (красно-оранжевый) */
     .stButton > button {
         background: linear-gradient(90deg, #FF512F 0%, #DD2475 100%);
         color: white;
@@ -24,23 +22,11 @@ st.markdown("""
         font-weight: bold;
         border-radius: 40px;
         transition: all 0.3s ease;
-        width: 100%;
     }
     .stButton > button:hover {
         transform: translateY(-2px);
         box-shadow: 0 8px 25px rgba(0,0,0,0.3);
     }
-    
-    /* Стиль для кнопки "Разовый доступ" (зелёный) */
-    button[kind="single"] {
-        background: linear-gradient(90deg, #00b09b 0%, #96c93d 100%) !important;
-        color: white !important;
-    }
-    button[kind="single"]:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 25px rgba(0,0,0,0.3);
-    }
-    
     h1 {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         -webkit-background-clip: text;
@@ -186,8 +172,7 @@ if st.session_state.uploaded_data is not None:
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    # Кнопка с кастомным атрибутом kind="single"
-                    if st.button("🎫 Разовый доступ (200 ₽)", type="primary", use_container_width=True, key="single_btn"):
+                    if st.button("🎫 Разовый доступ (200 ₽)", type="primary", use_container_width=True):
                         payment = Payment.create({
                             "amount": {"value": str(PRICE_SINGLE), "currency": "RUB"},
                             "payment_method_data": {"type": "bank_card"},
@@ -199,19 +184,9 @@ if st.session_state.uploaded_data is not None:
                         })
                         st.markdown(f"[Оплатить 200 ₽]({payment.confirmation.confirmation_url})")
                         st.info("💡 После оплаты нажмите 'Продолжить работу' и загрузите файл снова")
-                    
-                    # Добавляем JavaScript для применения стиля к кнопке
-                    st.markdown("""
-                        <script>
-                            const btn = document.querySelector('button[key="single_btn"]');
-                            if (btn) {
-                                btn.setAttribute('kind', 'single');
-                            }
-                        </script>
-                    """, unsafe_allow_html=True)
                 
                 with col2:
-                    if st.button("👑 Premium на месяц (1000 ₽)", use_container_width=True):
+                    if st.button("👑 Premium на месяц (1000 ₽)", type="primary", use_container_width=True):
                         payment = Payment.create({
                             "amount": {"value": str(PRICE_MONTHLY), "currency": "RUB"},
                             "payment_method_data": {"type": "bank_card"},
