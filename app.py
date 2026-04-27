@@ -33,10 +33,7 @@ st.markdown("""
 
 # ========== ИНИЦИАЛИЗАЦИЯ СЕССИИ ==========
 if 'user_id' not in st.session_state:
-    # Простой идентификатор пользователя (в реальном проекте используйте аккаунты)
     st.session_state.user_id = str(uuid.uuid4())
-if 'temp_premium' not in st.session_state:
-    st.session_state.temp_premium = False
 
 # ========== РАБОТА С БАЗОЙ ДАННЫХ ==========
 def init_db():
@@ -47,50 +44,93 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             user_id TEXT PRIMARY KEY,
             premium_type TEXT,
-            expires_at TIMESTAMP,
+            expires_at TEXT,
             payment_id TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     conn.commit()
     conn.close()
 
 def check_premium(user_id):
-    """Проверяет, активен ли Premium у пользователя"""
-    conn = sqlite3.connect('premium_users.db')
-    c = conn.cursor()
-    c.execute('''
-        SELECT premium_type, expires_at FROM users 
-        WHERE user_id = ? AND expires_at > ?
-        ORDER BY expires_at DESC LIMIT 1
-    ''', (user_id, datetime.now()))
-    result = c.fetchone()
-    conn.close()
-    
-    if result:
-        return result[0]  # 'single' или 'monthly'
-    return None
+    """
+    Проверяет, активен ли Premium у пользователя.
+    Возвращает словарь с информацией о подписке или None
+    """
+    try:
+        conn = sqlite3.connect('premium_users.db')
+        c = conn.cursor()
+        now = datetime.now().isoformat()
+        
+        c.execute('''
+            SELECT premium_type, expires_at FROM users 
+            WHERE user_id = ? AND expires_at > ?
+            ORDER BY expires_at DESC LIMIT 1
+        ''', (user_id, now))
+        
+        result = c.fetchone()
+        conn.close()
+        
+        if result:
+            premium_type = result[0]
+            expires_at_str = result[1]
+            expires_at = datetime.fromisoformat(expires_at_str)
+            now = datetime.now()
+            
+            # Рассчитываем оставшееся время
+            if premium_type == 'single':
+                hours_left = int((expires_at - now).total_seconds() // 3600)
+                return {
+                    'type': premium_type,
+                    'expires_at': expires_at_str,
+                    'time_left': f"{hours_left} ч.",
+                    'is_active': True
+                }
+            else:
+                days_left = (expires_at - now).days
+                return {
+                    'type': premium_type,
+                    'expires_at': expires_at_str,
+                    'time_left': f"{days_left} дн.",
+                    'is_active': True
+                }
+        return None
+    except Exception as e:
+        print(f"[DB ERROR] check_premium: {e}")
+        return None
 
 def activate_premium(user_id, premium_type, payment_id):
     """Активирует Premium в базе данных"""
-    conn = sqlite3.connect('premium_users.db')
-    c = conn.cursor()
-    
-    now = datetime.now()
-    if premium_type == 'single':
-        expires_at = now + timedelta(hours=24)
-    elif premium_type == 'monthly':
-        expires_at = now + timedelta(days=30)
-    else:
-        expires_at = now
-    
-    c.execute('''
-        INSERT OR REPLACE INTO users (user_id, premium_type, expires_at, payment_id)
-        VALUES (?, ?, ?, ?)
-    ''', (user_id, premium_type, expires_at, payment_id))
-    
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('premium_users.db')
+        c = conn.cursor()
+        
+        now = datetime.now()
+        if premium_type == 'single':
+            expires_at = now + timedelta(hours=24)
+        elif premium_type == 'monthly':
+            expires_at = now + timedelta(days=30)
+        else:
+            expires_at = now
+        
+        # Сохраняем в ISO формате для надёжного сравнения
+        expires_at_str = expires_at.isoformat()
+        created_at_str = now.isoformat()
+        
+        c.execute('''
+            INSERT OR REPLACE INTO users (user_id, premium_type, expires_at, payment_id, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (user_id, premium_type, expires_at_str, payment_id, created_at_str))
+        
+        conn.commit()
+        conn.close()
+        
+        # Логируем в консоль (будет видно в логах Render)
+        print(f"[DB] Premium activated for {user_id[:8]}...: {premium_type} until {expires_at_str}")
+        return True
+    except Exception as e:
+        print(f"[DB ERROR] activate_premium: {e}")
+        return False
 
 # Инициализируем базу данных при старте
 init_db()
@@ -114,11 +154,9 @@ PRICE_MONTHLY = 1000
 
 def is_premium_active():
     """Проверяет Premium через базу данных"""
-    premium_type = check_premium(st.session_state.user_id)
-    if premium_type:
-        st.session_state.temp_premium = True
+    premium_info = check_premium(st.session_state.user_id)
+    if premium_info and premium_info.get('is_active'):
         return True
-    st.session_state.temp_premium = False
     return False
 
 # ========== ВОЗВРАТ ПОСЛЕ ОПЛАТЫ ==========
@@ -127,13 +165,16 @@ if query_params.get("success") == "true":
     payment_type = query_params.get("type", "unknown")
     payment_id = query_params.get("payment_id", "")
     
-    if payment_type == "single" or payment_type == "monthly":
-        # Сохраняем Premium в базу данных
+    if payment_type in ["single", "monthly"]:
         activate_premium(st.session_state.user_id, payment_type, payment_id)
     
     st.title("✅ Оплата прошла успешно!")
     st.balloons()
-    st.markdown(f"**{payment_type.upper()}** доступ активирован!")
+    if payment_type == "single":
+        st.markdown("**🎫 Разовый доступ активирован на 24 часа!**")
+    elif payment_type == "monthly":
+        st.markdown("**👑 Premium активирован на 30 дней!**")
+    
     st.query_params.clear()
     if st.button("🚀 Продолжить работу"):
         st.rerun()
@@ -149,9 +190,12 @@ with st.sidebar:
     st.markdown("**🎫 Разовый доступ** — 200 ₽ (24 часа)")
     st.markdown("**👑 Premium** — 1000 ₽ (30 дней)")
     
-    premium_type = check_premium(st.session_state.user_id)
-    if premium_type:
-        st.success(f"⭐ Premium активен ({premium_type})")
+    premium_info = check_premium(st.session_state.user_id)
+    if premium_info and premium_info.get('is_active'):
+        if premium_info['type'] == 'single':
+            st.success(f"⭐ Разовый доступ активен (ещё {premium_info['time_left']})")
+        else:
+            st.success(f"⭐ Premium активен (ещё {premium_info['time_left']})")
     st.caption(f"🆔 Ваш ID: {st.session_state.user_id[:8]}...")
 
 # ========== ЗАГРУЗКА ФАЙЛА ==========
@@ -162,12 +206,14 @@ if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
         rows = len(df)
     
-    # ОТЛАДКА
-    premium_status = check_premium(st.session_state.user_id)
-    st.caption(f"📊 Отладка: строк {rows:,} | лимит {MAX_FREE_ROWS:,} | Premium: {premium_status if premium_status else 'Нет'}")
+    # Проверяем статус Premium
+    premium_info = check_premium(st.session_state.user_id)
+    is_premium = premium_info and premium_info.get('is_active')
+    
+    st.caption(f"📊 Отладка: строк {rows:,} | лимит {MAX_FREE_ROWS:,} | Premium: {'Да' if is_premium else 'Нет'}")
     
     # ========== ПРОВЕРКА ЛИМИТА ==========
-    if not premium_status and rows > MAX_FREE_ROWS:
+    if not is_premium and rows > MAX_FREE_ROWS:
         st.warning(f"⚠️ Ваш файл содержит **{rows:,} строк** (бесплатно до {MAX_FREE_ROWS:,})")
         
         st.markdown("## 💳 Выберите способ оплаты:")
@@ -176,27 +222,29 @@ if uploaded_file is not None:
         
         with col1:
             if st.button("🎫 Разовый доступ (200 ₽)", use_container_width=True):
+                payment_id = str(uuid.uuid4())
                 payment = Payment.create({
                     "amount": {"value": "200", "currency": "RUB"},
                     "payment_method_data": {"type": "bank_card"},
                     "confirmation": {
                         "type": "redirect",
-                        "return_url": f"https://csv-analyzer-ru.onrender.com/?success=true&type=single&payment_id={uuid.uuid4()}"
+                        "return_url": f"https://csv-analyzer-ru.onrender.com/?success=true&type=single&payment_id={payment_id}"
                     },
-                    "description": f"Разовый доступ - {uuid.uuid4()}"
+                    "description": f"Разовый доступ - {payment_id}"
                 })
                 st.markdown(f"[👉 ОПЛАТИТЬ 200 ₽ 👈]({payment.confirmation.confirmation_url})")
         
         with col2:
             if st.button("👑 Premium на месяц (1000 ₽)", use_container_width=True):
+                payment_id = str(uuid.uuid4())
                 payment = Payment.create({
                     "amount": {"value": "1000", "currency": "RUB"},
                     "payment_method_data": {"type": "bank_card"},
                     "confirmation": {
                         "type": "redirect",
-                        "return_url": f"https://csv-analyzer-ru.onrender.com/?success=true&type=monthly&payment_id={uuid.uuid4()}"
+                        "return_url": f"https://csv-analyzer-ru.onrender.com/?success=true&type=monthly&payment_id={payment_id}"
                     },
-                    "description": f"Premium - {uuid.uuid4()}"
+                    "description": f"Premium - {payment_id}"
                 })
                 st.markdown(f"[👉 ОПЛАТИТЬ 1000 ₽ 👈]({payment.confirmation.confirmation_url})")
         
@@ -204,7 +252,7 @@ if uploaded_file is not None:
         st.stop()
     
     # ========== АНАЛИЗ ==========
-    st.success(f"✅ Файл загружен: **{rows:,} строк**" + (" (Premium активен)" if premium_status else ""))
+    st.success(f"✅ Файл загружен: **{rows:,} строк**" + (" (Premium активен)" if is_premium else ""))
     
     st.markdown("---")
     st.markdown("## 📊 Предпросмотр")
