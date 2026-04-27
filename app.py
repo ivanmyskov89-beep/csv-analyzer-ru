@@ -3,6 +3,7 @@ import pandas as pd
 from yookassa import Configuration, Payment
 import uuid
 import os
+import io
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
@@ -45,6 +46,15 @@ st.markdown("""
         background: linear-gradient(90deg, #FF6B4A 0%, #FF3B6B 100%);
     }
     
+    /* Зелёная кнопка для разового доступа */
+    button[kind="single"] {
+        background: linear-gradient(90deg, #00b09b 0%, #96c93d 100%) !important;
+    }
+    button[kind="single"]:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+    }
+    
     /* Заголовки */
     h1 {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -74,6 +84,18 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
+
+# ========== ИНИЦИАЛИЗАЦИЯ ПЕРЕМЕННЫХ СЕССИИ ==========
+if 'uploaded_data' not in st.session_state:
+    st.session_state.uploaded_data = None
+if 'uploaded_filename' not in st.session_state:
+    st.session_state.uploaded_filename = None
+if 'premium' not in st.session_state:
+    st.session_state.premium = False
+if 'temp_premium' not in st.session_state:
+    st.session_state.temp_premium = False
+if 'premium_expiry' not in st.session_state:
+    st.session_state.premium_expiry = None
 
 # ========== ЗАГРУЗКА ПЕРЕМЕННЫХ ИЗ .env ==========
 load_dotenv()
@@ -114,8 +136,9 @@ if query_params.get("success") == "true":
         st.session_state.premium = True
         st.session_state.premium_expiry = datetime.now() + timedelta(days=30)
     
+    st.query_params.clear()
+    
     if st.button("🚀 Перейти к анализу CSV", type="primary"):
-        st.query_params.clear()
         st.rerun()
     st.stop()
 
@@ -183,14 +206,21 @@ with st.sidebar:
 
 # Загрузка файла
 st.markdown("### 📂 Загрузите ваш CSV файл")
+
 uploaded_file = st.file_uploader("", type="csv", label_visibility="collapsed")
 
 if uploaded_file is not None:
+    # Сохраняем данные в сессию
+    st.session_state.uploaded_data = uploaded_file.getvalue()
+    st.session_state.uploaded_filename = uploaded_file.name
+    st.rerun()
+
+# Работа с данными из сессии
+if st.session_state.uploaded_data is not None:
     try:
-        with st.spinner("🔄 Обработка файла..."):
-            df = pd.read_csv(uploaded_file)
-            row_count = len(df)
-            file_size_mb = uploaded_file.size / (1024 * 1024)
+        df = pd.read_csv(io.BytesIO(st.session_state.uploaded_data))
+        row_count = len(df)
+        file_size_mb = len(st.session_state.uploaded_data) / (1024 * 1024)
         
         if not is_premium_active():
             if row_count > MAX_FREE_ROWS or file_size_mb > MAX_FREE_SIZE_MB:
@@ -210,7 +240,7 @@ if uploaded_file is not None:
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    if st.button("🎫 Разовый доступ (200 ₽)", type="primary", use_container_width=True):
+                    if st.button("🎫 Разовый доступ (200 ₽)", type="primary", use_container_width=True, key="single_btn"):
                         with st.spinner("🔄 Перенаправление на оплату..."):
                             payment = Payment.create({
                                 "amount": {"value": str(PRICE_SINGLE), "currency": "RUB"},
@@ -224,6 +254,14 @@ if uploaded_file is not None:
                             st.session_state.payment_id = payment.id
                             st.markdown(f"[Оплатить 200 ₽]({payment.confirmation.confirmation_url})")
                             st.info("📌 После оплаты вы вернётесь на эту страницу")
+                    
+                    # Добавляем атрибут kind для зелёной кнопки
+                    st.markdown("""
+                        <script>
+                            const btn = document.querySelector('button[key="single_btn"]');
+                            if (btn) btn.setAttribute('kind', 'single');
+                        </script>
+                    """, unsafe_allow_html=True)
                 
                 with col2:
                     if st.button("👑 Premium на месяц (1000 ₽)", type="primary", use_container_width=True):
@@ -245,7 +283,7 @@ if uploaded_file is not None:
                 st.stop()
         
         # Анализ данных
-        st.success(f"✅ Файл успешно загружен! **{row_count:,} строк**, **{file_size_mb:.1f} МБ**")
+        st.success(f"✅ Файл **{st.session_state.uploaded_filename}** успешно загружен! **{row_count:,} строк**, **{file_size_mb:.1f} МБ**")
         
         st.markdown("---")
         st.markdown("## 📊 Предпросмотр данных")
@@ -277,18 +315,64 @@ if uploaded_file is not None:
         st.markdown("---")
         st.markdown("## 💾 Экспорт данных")
         
-        csv_export = df.to_csv(index=False).encode('utf-8-sig')
+        # Выбор формата экспорта
+        export_format = st.selectbox(
+            "Выберите формат для скачивания:",
+            ["CSV", "Excel (XLSX)", "JSON"],
+            help="CSV — универсальный формат, Excel — для работы в таблицах, JSON — для разработчиков"
+        )
+        
+        # Формируем файл в зависимости от выбранного формата
+        if export_format == "CSV":
+            export_data = df.to_csv(index=False).encode('utf-8-sig')
+            mime_type = "text/csv"
+            file_extension = "csv"
+            icon = "📊"
+            description = "CSV — открывается в Excel, Google Sheets и любых текстовых редакторах"
+            
+        elif export_format == "Excel (XLSX)":
+            try:
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df.to_excel(writer, index=False, sheet_name='Data')
+                export_data = output.getvalue()
+                mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                file_extension = "xlsx"
+                icon = "📗"
+                description = "Excel XLSX — открывается в Microsoft Excel, LibreOffice, Google Sheets"
+            except ImportError:
+                st.error("❌ Библиотека openpyxl не установлена на сервере. Используйте CSV или JSON.")
+                st.info("Администратор может установить библиотеку командой: pip install openpyxl")
+                st.stop()
+                
+        elif export_format == "JSON":
+            export_data = df.to_json(orient='records', indent=2, force_ascii=False).encode('utf-8-sig')
+            mime_type = "application/json"
+            file_extension = "json"
+            icon = "📋"
+            description = "JSON — удобный формат для разработчиков и API"
+        
+        # Кнопка скачивания
         st.download_button(
-            label="📥 Скачать результат (CSV)",
-            data=csv_export,
-            file_name="analyzed_data.csv",
-            mime="text/csv",
+            label=f"{icon} Скачать как {export_format}",
+            data=export_data,
+            file_name=f"analyzed_data.{file_extension}",
+            mime=mime_type,
             use_container_width=True
         )
+        
+        st.caption(f"ℹ️ {description}")
+        
+        # Кнопка для очистки файла
+        if st.button("🗑️ Очистить и загрузить другой файл"):
+            st.session_state.uploaded_data = None
+            st.session_state.uploaded_filename = None
+            st.rerun()
         
     except Exception as e:
         st.error(f"❌ Ошибка при обработке файла: {e}")
         st.info("Убедитесь, что файл имеет правильный формат CSV (разделитель - запятая)")
+        st.session_state.uploaded_data = None
 else:
     st.info("👈 Загрузите CSV файл, чтобы начать анализ")
     
@@ -301,7 +385,7 @@ else:
         - Автоматическая статистика по всем столбцам
         - Определение типов данных
         - Поиск пустых значений
-        - Экспорт обработанных данных
+        - Экспорт в CSV, Excel (XLSX) и JSON
         
         **Тарифы:**
         - **Бесплатно** — для файлов до 50 000 строк
