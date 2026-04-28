@@ -7,6 +7,7 @@ import io
 import sqlite3
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
+import time
 
 # ========== СТИЛИ ==========
 st.set_page_config(page_title="CSV Анализатор Pro", layout="wide", page_icon="🚀")
@@ -293,11 +294,25 @@ if uploaded_file is not None:
         )
     
     elif export_format == "Excel (XLSX)":
+        # Предупреждение о времени создания
+        st.info("⏳ Создание Excel-файла может занять 30-60 секунд. Пожалуйста, подождите...")
+        
+        # Прогресс-бар
+        progress_bar = st.progress(0)
+        for i in range(100):
+            time.sleep(0.01)  # Имитация работы для анимации
+            progress_bar.progress(i + 1)
+        
         try:
+            # Используем xlsxwriter (быстрее, чем openpyxl)
             output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False, sheet_name='Data')
             excel_data = output.getvalue()
+            
+            # Завершаем прогресс-бар
+            progress_bar.progress(100)
+            
             st.download_button(
                 label="📥 Скачать Excel",
                 data=excel_data,
@@ -306,7 +321,8 @@ if uploaded_file is not None:
                 use_container_width=True
             )
         except Exception as e:
-            st.error(f"Excel не поддерживается: {e}")
+            st.error(f"Ошибка при создании Excel: {e}")
+            st.info("Попробуйте использовать формат CSV или JSON")
     
     elif export_format == "JSON":
         json_data = df.to_json(orient='records', indent=2, force_ascii=False).encode('utf-8')
