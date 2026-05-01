@@ -255,7 +255,14 @@ query_params = st.query_params
 if query_params.get("success") == "true":
     payment_type = query_params.get("type", "unknown")
     payment_id = query_params.get("payment_id", "")
+    email = query_params.get("email", "")  # Получаем email из URL
     
+    # Автоматически входим, если email передан
+    if email:
+        st.session_state.logged_in = True
+        st.session_state.user_email = email
+    
+    # Активируем подписку
     if st.session_state.logged_in and payment_type in ["single", "monthly"]:
         activate_premium(st.session_state.user_email, payment_type, payment_id)
     
@@ -266,6 +273,7 @@ if query_params.get("success") == "true":
     elif payment_type == "monthly":
         st.markdown("**👑 Premium активирован на 30 дней!**")
     
+    # Очищаем параметры URL, но оставляем пользователя в системе
     st.query_params.clear()
     if st.button("🚀 Продолжить работу"):
         st.rerun()
@@ -321,7 +329,7 @@ else:
                         "payment_method_data": {"type": "bank_card"},
                         "confirmation": {
                             "type": "redirect",
-                            "return_url": f"https://csv-analyzer-ru.onrender.com/?success=true&type=single&payment_id={payment_id}"
+                            "return_url": f"https://csv-analyzer-ru.onrender.com/?success=true&type=single&payment_id={payment_id}&email={st.session_state.user_email}"
                         },
                         "description": f"Разовый доступ - {payment_id}"
                     })
@@ -334,7 +342,7 @@ else:
                         "payment_method_data": {"type": "bank_card"},
                         "confirmation": {
                             "type": "redirect",
-                            "return_url": f"https://csv-analyzer-ru.onrender.com/?success=true&type=monthly&payment_id={payment_id}"
+                            "return_url": f"https://csv-analyzer-ru.onrender.com/?success=true&type=monthly&payment_id={payment_id}&email={st.session_state.user_email}"
                         },
                         "description": f"Premium - {payment_id}"
                     })
